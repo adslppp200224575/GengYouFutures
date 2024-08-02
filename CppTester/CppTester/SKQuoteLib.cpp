@@ -1,12 +1,28 @@
 #include "SKQuoteLib.h"
+#include <array>
 #include <deque>
 #include <iostream>
+#include <map>
+#include <unordered_map>
 
-std::deque<long> gDaysKlineDiff;
 bool gEatOffer = false;
-long gCurTXHighLowPoint[2] = {0, 0};
+std::unordered_map<long, std::array<long, 2>> gCurCommHighLowPoint;
+std::deque<long> gDaysKlineDiff;
+
+std::map<string, pair<double, double>> gDaysCommHighLowPoint;
+std::map<string, pair<pair<double, double>, pair<double, double>>> gNightCommHighLowPoint;
+
+std::unordered_map<long, long> gCurMtxPrice;
+std::unordered_map<SHORT, std::array<long, 4>> gCurTaiexInfo;
+std::unordered_map<long, vector<pair<long, long>>> gBest5BidOffer;
+
+SHORT gCurServerTime[3] = {-1, -1, -1};
 
 long CalculateDiff(const std::string &data);
+void CaluCurCommHighLowPoint(IN long nStockIndex, IN long nClose, IN long nSimulate, IN long lTimehms);
+void GetCurPrice(IN long nStockIndex, IN long nClose, IN long nSimulate);
+void parseAndProcessData(const string &data);
+void ProcessDaysOrNightCommHighLowPoint();
 
 CSKQuoteLib::CSKQuoteLib()
 {
@@ -79,7 +95,8 @@ HRESULT CSKQuoteLib::OnEventFiringObjectInvoke(
         long nAsk = V_I4(&(pdispparams->rgvarg)[3]);
         long nClose = V_I4(&(pdispparams->rgvarg)[2]);
         long nQty = V_I4(&(pdispparams->rgvarg)[1]);
-        OnNotifyHistoryTicksLONG(nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
+        long nSimulate = V_I4(&(pdispparams->rgvarg)[0]);
+        OnNotifyHistoryTicksLONG(nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty, nSimulate);
         break;
     }
     case 21: // OnNotifyTicksLONG
@@ -92,13 +109,14 @@ HRESULT CSKQuoteLib::OnEventFiringObjectInvoke(
         long nAsk = V_I4(&(pdispparams->rgvarg)[3]);
         long nClose = V_I4(&(pdispparams->rgvarg)[2]);
         long nQty = V_I4(&(pdispparams->rgvarg)[1]);
-        OnNotifyTicksLONG(nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
+        long nSimulate = V_I4(&(pdispparams->rgvarg)[0]);
+        OnNotifyTicksLONG(nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty, nSimulate);
         break;
     }
     case 22: // OnNotifyBest5LONG
     {
         // from last to first
-        // LONG nSimulate = V_I4(&(pdispparams->rgvarg)[0]);
+        LONG nSimulate = V_I4(&(pdispparams->rgvarg)[0]);
         // LONG nExtendAskQty = V_I4(&(pdispparams->rgvarg)[1]);
         LONG nExtendAsk = V_I4(&(pdispparams->rgvarg)[2]);
         LONG nBestAskQty5 = V_I4(&(pdispparams->rgvarg)[3]);
@@ -123,10 +141,12 @@ HRESULT CSKQuoteLib::OnEventFiringObjectInvoke(
         LONG nBestBid2 = V_I4(&(pdispparams->rgvarg)[22]);
         LONG nBestBidQty1 = V_I4(&(pdispparams->rgvarg)[23]);
         LONG nBestBid1 = V_I4(&(pdispparams->rgvarg)[24]);
-        // LONG nStockidx = V_I4(&(pdispparams->rgvarg)[25]);
-        // SHORT sMarketNo = V_I2(&(pdispparams->rgvarg)[26]);
+        LONG nStockidx = V_I4(&(pdispparams->rgvarg)[25]);
+        SHORT sMarketNo = V_I2(&(pdispparams->rgvarg)[26]);
 
-        OnNotifyBest5LONG(nBestBid1,
+        OnNotifyBest5LONG(sMarketNo,
+                          nStockidx,
+                          nBestBid1,
                           nBestBidQty1,
                           nBestBid2,
                           nBestBidQty2,
@@ -136,6 +156,8 @@ HRESULT CSKQuoteLib::OnEventFiringObjectInvoke(
                           nBestBidQty4,
                           nBestBid5,
                           nBestBidQty5,
+                          0,
+                          0,
                           nBestAsk1,
                           nBestAskQty1,
                           nBestAsk2,
@@ -145,7 +167,10 @@ HRESULT CSKQuoteLib::OnEventFiringObjectInvoke(
                           nBestAsk4,
                           nBestAskQty4,
                           nBestAsk5,
-                          nBestAskQty5);
+                          nBestAskQty5,
+                          0,
+                          0,
+                          nSimulate);
 
         break;
     }
@@ -172,8 +197,38 @@ HRESULT CSKQuoteLib::OnEventFiringObjectInvoke(
         break;
     }
 
-    default:
+    case 8:
+    {
+        // Your code for cases 8, 9, 10, and 17 here
+        // ...
 
+        SHORT sMarketNo = V_I2(&(pdispparams->rgvarg)[5]);
+        LONG nTime = V_I4(&(pdispparams->rgvarg)[3]);
+        LONG nTotv = V_I4(&(pdispparams->rgvarg)[2]);
+
+        OnNotifyMarketTot(sMarketNo, 0, nTime, nTotv, 0, 0);
+
+        break;
+    }
+    case 9:
+    {
+        SHORT sMarketNo = V_I2(&(pdispparams->rgvarg)[6]);
+        LONG nTime = V_I4(&(pdispparams->rgvarg)[4]);
+        LONG BuyCount = V_I4(&(pdispparams->rgvarg)[1]);
+        LONG SellCount = V_I4(&(pdispparams->rgvarg)[0]);
+
+        OnNotifyMarketBuySell(sMarketNo, 0, nTime, 0, 0, BuyCount, SellCount);
+
+        break;
+    }
+    case 10:
+    case 17:
+    {
+        break;
+    }
+
+    default:
+        // Code for other cases
         break;
     }
 
@@ -222,6 +277,9 @@ long CSKQuoteLib::RequestKLine(string strStockNo)
     DEBUG(DEBUG_LEVEL_DEBUG, "start");
     BSTR BstrStockNo = _bstr_t(strStockNo.c_str());
 
+    // string StrOutType = "1";
+    // BSTR BstrOutType = _bstr_t(StrOutType.c_str());
+
     // string StartDateStr = "20240716";
     // BSTR StartDate = _bstr_t(StartDateStr.c_str());
 
@@ -230,15 +288,8 @@ long CSKQuoteLib::RequestKLine(string strStockNo)
 
     long res = 0;
 
-    // res = m_pSKQuoteLib->SKQuoteLib_RequestKLineAMByDate(BstrStockNo, 4, 1, 1, StartDate, EndDate, 0);
-
-    // if (res != 0)
-    // {
-    res = m_pSKQuoteLib->SKQuoteLib_RequestKLine(BstrStockNo, 4, 1);
-    DEBUG(DEBUG_LEVEL_DEBUG, "m_pSKQuoteLib->SKQuoteLib_RequestKLine = %d", res);
-    //}
-
-    // WaitForSingleObject(hEvent, INFINITE);
+    res = m_pSKQuoteLib->SKQuoteLib_RequestKLineAM(BstrStockNo, 0, 1, 0);
+    DEBUG(DEBUG_LEVEL_DEBUG, "m_pSKQuoteLib->SKQuoteLib_RequestKLineAM = %d", res);
 
     return res;
 }
@@ -248,7 +299,7 @@ long CSKQuoteLib::RequestServerTime()
     long res = 0;
 
     res = m_pSKQuoteLib->SKQuoteLib_RequestServerTime();
-    DEBUG(DEBUG_LEVEL_INFO, "m_pSKQuoteLib->SKQuoteLib_RequestServerTime = %d", res);
+    DEBUG(DEBUG_LEVEL_DEBUG, "m_pSKQuoteLib->SKQuoteLib_RequestServerTime = %d", res);
 
     return res;
 }
@@ -260,14 +311,14 @@ long CSKQuoteLib::RequestStockIndexMap(IN string strStockNo, OUT SKCOMLib::SKSTO
     BSTR bstrStockNo = _bstr_t(strStockNo.c_str());
 
     long res = m_pSKQuoteLib->SKQuoteLib_GetStockByNoLONG(bstrStockNo, pSKStock);
-    DEBUG(DEBUG_LEVEL_INFO, "m_pSKQuoteLib->SKQuoteLib_GetStockByNoLONG = %d", res);
+    DEBUG(DEBUG_LEVEL_DEBUG, "m_pSKQuoteLib->SKQuoteLib_GetStockByNoLONG = %d", res);
 
     if (res == 0)
     {
         char *szStockNo = _com_util::ConvertBSTRToString(pSKStock->bstrStockNo);
         char *szStockName = _com_util::ConvertBSTRToString(pSKStock->bstrStockName);
 
-        DEBUG(DEBUG_LEVEL_INFO, "szStockNo: %s, szStockName : %s, nStockidx : %ld, nHigh: %d, nLow: %d",
+        DEBUG(DEBUG_LEVEL_DEBUG, "szStockNo: %s, szStockName : %s, nStockidx : %ld, nHigh: %d, nLow: %d",
               szStockNo,
               szStockName,
               pSKStock->nStockIdx,
@@ -279,6 +330,73 @@ long CSKQuoteLib::RequestStockIndexMap(IN string strStockNo, OUT SKCOMLib::SKSTO
     }
 
     return res;
+}
+
+long CSKQuoteLib::GetMarketBuySellUpDown(VOID)
+{
+    DEBUG(DEBUG_LEVEL_DEBUG, "start");
+
+    long res = m_pSKQuoteLib->SKQuoteLib_GetMarketBuySellUpDown();
+    DEBUG(DEBUG_LEVEL_DEBUG, "m_pSKQuoteLib->SKQuoteLib_GetMarketBuySellUpDown = %d", res);
+
+    return res;
+}
+
+void CSKQuoteLib::ProcessDaysOrNightCommHighLowPoint()
+{
+    if (gCurServerTime[0] < 0)
+    {
+        return;
+    }
+
+    bool isDaySession = gCurServerTime[0] >= 8 && gCurServerTime[0] <= 14;
+
+    bool isNightSession = gCurServerTime[0] < 8 || gCurServerTime[0] > 14;
+
+    if (isDaySession)
+    {
+        DEBUG(DEBUG_LEVEL_INFO, "isDaySession");
+
+        for (const auto &entry : gDaysCommHighLowPoint) // need ordered by date  from the past to the present
+        {
+            long diff = static_cast<long>(entry.second.first - entry.second.second);
+
+            DEBUG(DEBUG_LEVEL_DEBUG, "Date: %s, High: %f, Low: %f", entry.first, entry.second.first, entry.second.second);
+
+            gDaysKlineDiff.push_back(diff);
+
+            if (gDaysKlineDiff.size() > DayMA)
+            {
+                gDaysKlineDiff.pop_front();
+            }
+        }
+    }
+    else if (isNightSession)
+    {
+        DEBUG(DEBUG_LEVEL_INFO, "isNightSession");
+
+        for (const auto &entry : gNightCommHighLowPoint) // need ordered by date  from the past to the present
+        {
+            auto cur = entry.second.second;
+
+            if (cur.first == DBL_MIN || cur.second == DBL_MAX)
+            {
+                // Not every day there is an end of night trading
+                continue;
+            }
+
+            long diff = static_cast<long>(cur.first - cur.second);
+
+            DEBUG(DEBUG_LEVEL_DEBUG, "Date: %s, High: %f, Low: %f", entry.first, cur.first, cur.second);
+
+            gDaysKlineDiff.push_back(diff);
+
+            if (gDaysKlineDiff.size() > DayMA)
+            {
+                gDaysKlineDiff.pop_front();
+            }
+        }
+    }
 }
 
 // Events
@@ -334,48 +452,40 @@ void CSKQuoteLib::OnNotifyQuoteLONG(short sMarketNo, long nStockIndex)
           skStock.nClose,
           skStock.nTQty);
 
-    printf("OnNotifyQuoteLONG : %s %s bid:%d ask:%d last:%d volume:%d\n",
-           szStockNo,
-           szStockName,
-           skStock.nBid,
-           skStock.nAsk,
-           skStock.nClose,
-           skStock.nTQty);
+    // printf("OnNotifyQuoteLONG : %s %s bid:%d ask:%d last:%d volume:%d\n",
+    //        szStockNo,
+    //        szStockName,
+    //        skStock.nBid,
+    //        skStock.nAsk,
+    //        skStock.nClose,
+    //        skStock.nTQty);
 
     delete[] szStockName;
     delete[] szStockNo;
 }
 
-void CSKQuoteLib::OnNotifyTicksLONG(long nStockIndex, long nPtr, long nDate, long lTimehms, long nBid, long nAsk, long nClose, long nQty)
+void CSKQuoteLib::OnNotifyTicksLONG(long nStockIndex, long nPtr, long nDate, long lTimehms, long nBid, long nAsk, long nClose, long nQty, long nSimulate)
 {
     DEBUG(DEBUG_LEVEL_DEBUG, "start");
 
-    printf("OnNotifyTicksLONG : %ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n", nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
+    // printf("OnNotifyTicksLONG : %ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n", nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
 
-    DEBUG(DEBUG_LEVEL_INFO, "nStockIndex: %ld, nPtr: %ld,nDate: %ld,lTimehms: %ld,nBid: %ld,nAsk: %ld,nClose: %ld,nQty: %ld\n",
+    DEBUG(DEBUG_LEVEL_DEBUG, "nStockIndex: %ld, nPtr: %ld,nDate: %ld,lTimehms: %ld,nBid: %ld,nAsk: %ld,nClose: %ld,nQty: %ld\n",
           nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
 
-    if (nClose >= nAsk)
-    {
-        // will raise
-        gEatOffer = true;
-    }
-    else
-    {
-        gEatOffer = false;
-    }
+    GetCurPrice(nStockIndex, nClose, nSimulate);
+
+    CaluCurCommHighLowPoint(nStockIndex, nClose, nSimulate, lTimehms);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
-
-    // CalculateLongOrShort();
 }
 
-void CSKQuoteLib::OnNotifyHistoryTicksLONG(long nStockIndex, long nPtr, long nDate, long lTimehms, long nBid, long nAsk, long nClose, long nQty)
+void CSKQuoteLib::OnNotifyHistoryTicksLONG(long nStockIndex, long nPtr, long nDate, long lTimehms, long nBid, long nAsk, long nClose, long nQty, long nSimulate)
 {
     DEBUG(DEBUG_LEVEL_DEBUG, "start");
 
-    printf("OnNotifyHistoryTicksLONG : %ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n", nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
-    DEBUG(DEBUG_LEVEL_INFO, "nStockIndex: %ld, nPtr: %ld,nDate: %ld,lTimehms: %ld,nBid: %ld,nAsk: %ld,nClose: %ld,nQty: %ld\n",
+    // printf("OnNotifyHistoryTicksLONG : %ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld\n", nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
+    DEBUG(DEBUG_LEVEL_DEBUG, "nStockIndex: %ld, nPtr: %ld,nDate: %ld,lTimehms: %ld,nBid: %ld,nAsk: %ld,nClose: %ld,nQty: %ld\n",
           nStockIndex, nPtr, nDate, lTimehms, nBid, nAsk, nClose, nQty);
 
     if (nClose >= nAsk)
@@ -387,53 +497,69 @@ void CSKQuoteLib::OnNotifyHistoryTicksLONG(long nStockIndex, long nPtr, long nDa
     {
         gEatOffer = false;
     }
+
+    CaluCurCommHighLowPoint(nStockIndex, nClose, nSimulate, lTimehms);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
 
 void CSKQuoteLib::OnNotifyBest5LONG(
+    SHORT sMarketNo, LONG nStockidx,
     long nBestBid1, long nBestBidQty1,
     long nBestBid2, long nBestBidQty2,
     long nBestBid3, long nBestBidQty3,
     long nBestBid4, long nBestBidQty4,
     long nBestBid5, long nBestBidQty5,
+    LONG nExtendBid, LONG nExtendBidQty,
     long nBestAsk1, long nBestAskQty1,
     long nBestAsk2, long nBestAskQty2,
     long nBestAsk3, long nBestAskQty3,
     long nBestAsk4, long nBestAskQty4,
-    long nBestAsk5, long nBestAskQty5)
+    long nBestAsk5, long nBestAskQty5,
+    LONG nExtendAsk, LONG nExtendAskQty,
+    LONG nSimulate)
 {
     DEBUG(DEBUG_LEVEL_DEBUG, "start");
 
-    printf("OnNotifyBest5LONG\n");
+    DEBUG(DEBUG_LEVEL_DEBUG, "Ofr5: [%ld], q5G: [%ld]\n\n", nBestAsk5, nBestAskQty5);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Ofr4: [%ld], q4G: [%ld]\n", nBestAsk4, nBestAskQty4);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Ofr3: [%ld], q3G: [%ld]\n", nBestAsk3, nBestAskQty3);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Ofr2: [%ld], q2G: [%ld]\n", nBestAsk2, nBestAskQty2);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Ofr1: [%ld], q1G: [%ld]\n", nBestAsk1, nBestAskQty1);
 
-    printf("Ofr5: [%ld],q5G: [%ld]\n\n", nBestAsk5, nBestAskQty5);
-    printf("Ofr4: [%ld],q4G: [%ld]\n", nBestAsk4, nBestAskQty4);
-    printf("Ofr3: [%ld],q3G: [%ld]\n", nBestAsk3, nBestAskQty3);
-    printf("Ofr2: [%ld],q2G: [%ld]\n", nBestAsk2, nBestAskQty2);
-    printf("Ofr1: [%ld],q1G: [%ld]\n", nBestAsk1, nBestAskQty1);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Bid1: [%ld], q1G: [%ld]\n", nBestBid1, nBestBidQty1);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Bid2: [%ld], q2G: [%ld]\n", nBestBid2, nBestBidQty2);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Bid3: [%ld], q3G: [%ld]\n", nBestBid3, nBestBidQty3);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Bid4: [%ld], q4G: [%ld]\n", nBestBid4, nBestBidQty4);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Bid5: [%ld], q5G: [%ld]\n\n", nBestBid5, nBestBidQty5);
 
-    printf("Bid1: [%ld], q1G: [%ld]\n", nBestBid1, nBestBidQty1);
-    printf("Bid2: [%ld], q2G: [%ld]\n", nBestBid2, nBestBidQty2);
-    printf("Bid3: [%ld], q3G: [%ld]\n", nBestBid3, nBestBidQty3);
-    printf("Bid4: [%ld], q4G: [%ld]\n", nBestBid4, nBestBidQty4);
-    printf("Bid5: [%ld], q5G: [%ld]\n\n", nBestBid5, nBestBidQty5);
+    if (nSimulate == 0)
+    {
+        gBest5BidOffer[nStockidx] = {
+            {0, 0},
+            {0, 0},
+            {0, 0},
+            {0, 0},
+            {0, 0},
+            {0, 0},
+            {0, 0},
+            {0, 0},
+            {0, 0},
+            {0, 0},
+        };
 
-    printf("=================================\n\n");
+        gBest5BidOffer[nStockidx][0] = {nBestBid1, nBestBidQty1};
+        gBest5BidOffer[nStockidx][1] = {nBestBid2, nBestBidQty2};
+        gBest5BidOffer[nStockidx][2] = {nBestBid3, nBestBidQty3};
+        gBest5BidOffer[nStockidx][3] = {nBestBid4, nBestBidQty4};
+        gBest5BidOffer[nStockidx][4] = {nBestBid5, nBestBidQty5};
 
-    DEBUG(DEBUG_LEVEL_INFO, "Ofr5: [%ld], q5G: [%ld]\n\n", nBestAsk5, nBestAskQty5);
-    DEBUG(DEBUG_LEVEL_INFO, "Ofr4: [%ld], q4G: [%ld]\n", nBestAsk4, nBestAskQty4);
-    DEBUG(DEBUG_LEVEL_INFO, "Ofr3: [%ld], q3G: [%ld]\n", nBestAsk3, nBestAskQty3);
-    DEBUG(DEBUG_LEVEL_INFO, "Ofr2: [%ld], q2G: [%ld]\n", nBestAsk2, nBestAskQty2);
-    DEBUG(DEBUG_LEVEL_INFO, "Ofr1: [%ld], q1G: [%ld]\n", nBestAsk1, nBestAskQty1);
-
-    DEBUG(DEBUG_LEVEL_INFO, "Bid1: [%ld], q1G: [%ld]\n", nBestBid1, nBestBidQty1);
-    DEBUG(DEBUG_LEVEL_INFO, "Bid2: [%ld], q2G: [%ld]\n", nBestBid2, nBestBidQty2);
-    DEBUG(DEBUG_LEVEL_INFO, "Bid3: [%ld], q3G: [%ld]\n", nBestBid3, nBestBidQty3);
-    DEBUG(DEBUG_LEVEL_INFO, "Bid4: [%ld], q4G: [%ld]\n", nBestBid4, nBestBidQty4);
-    DEBUG(DEBUG_LEVEL_INFO, "Bid5: [%ld], q5G: [%ld]\n\n", nBestBid5, nBestBidQty5);
-
-    // CalculateLongOrShort();
+        gBest5BidOffer[nStockidx][5] = {nBestAsk1, nBestAskQty1};
+        gBest5BidOffer[nStockidx][6] = {nBestAsk2, nBestAskQty2};
+        gBest5BidOffer[nStockidx][7] = {nBestAsk3, nBestAskQty3};
+        gBest5BidOffer[nStockidx][8] = {nBestAsk4, nBestAskQty4};
+        gBest5BidOffer[nStockidx][9] = {nBestAsk5, nBestAskQty5};
+    }
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
@@ -461,44 +587,58 @@ void CSKQuoteLib::OnNotifyStockList(long sMarketNo, string strStockData)
 
 void CSKQuoteLib::OnNotifyKLineData(BSTR bstrStockNo, BSTR bstrData)
 {
-    DEBUG(DEBUG_LEVEL_DEBUG, "start");
+    DEBUG(DEBUG_LEVEL_INFO, "start");
 
     string strStockNo = string(_bstr_t(bstrStockNo));
 
-    cout << "OnNotifyKLineData : " << endl;
-    cout << "strStockNo : " << strStockNo << endl;
+    // cout << "OnNotifyKLineData : " << endl;
+    // cout << "strStockNo : " << strStockNo << endl;
 
     DEBUG(DEBUG_LEVEL_DEBUG, "strStockNo= %s", strStockNo);
 
     string strData = string(_bstr_t(bstrData));
 
-    cout << "strData : " << strData;
+    // cout << "strData : " << strData;
+
+    // (年/月/日 時:分, 開盤價, 最高價, 最低價, 收盤價, 成交量)
+    // 2024/07/30 16:16, 22256.00, 22259.00, 22250.00, 22255.00, 389
 
     DEBUG(DEBUG_LEVEL_DEBUG, "strData= %s", strData);
 
-    cout << endl;
-
-    long diff = CalculateDiff(strData);
-
-    gDaysKlineDiff.push_back(diff);
-
-    if (gDaysKlineDiff.size() > DayMA)
-    {
-        gDaysKlineDiff.pop_front();
-    }
-
-    // CalculateDailyWavesAndKeyPrices()
-
-    // SetEvent(hEvent);
-
-    // CalculateLongOrShort();
+    parseAndProcessData(strData);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
 
 void CSKQuoteLib::OnNotifyServerTime(SHORT sHour, SHORT sMinute, SHORT sSecond, LONG nTotal)
 {
-    DEBUG(DEBUG_LEVEL_INFO, "Hour: %d Minute: %d Second: %d Total[%ld]", sHour, sMinute, sSecond, nTotal);
+    DEBUG(DEBUG_LEVEL_DEBUG, "Hour: %d Minute: %d Second: %d Total[%ld]", sHour, sMinute, sSecond, nTotal);
+
+    gCurServerTime[0] = sHour;
+    gCurServerTime[1] = sMinute;
+    gCurServerTime[2] = sSecond;
+}
+
+void CSKQuoteLib::OnNotifyMarketTot(SHORT sMarketNo, SHORT sPtr, LONG nTime, LONG nTotv, LONG nTots, LONG nTotc)
+{
+    DEBUG(DEBUG_LEVEL_DEBUG, "start");
+
+    DEBUG(DEBUG_LEVEL_DEBUG, "sMarketNo: %d nTime: %d nTotv: %ld", sMarketNo, nTime, nTotv);
+
+    gCurTaiexInfo[sMarketNo][0] = nTime;
+    gCurTaiexInfo[sMarketNo][1] = nTotv;
+
+    // GetCurTaiexInfo(sMarketNo, nTime, nTotv, 0, 0);
+}
+
+void CSKQuoteLib::OnNotifyMarketBuySell(SHORT sMarketNo, SHORT sPtr, LONG nTime, LONG nBc, LONG nSc, LONG nBs, LONG nSs)
+{
+    DEBUG(DEBUG_LEVEL_DEBUG, "start");
+
+    DEBUG(DEBUG_LEVEL_DEBUG, "sMarketNo: %d nTime: %d Buy: %ld Sell: %ld", sMarketNo, nTime, nBs, nSs);
+
+    gCurTaiexInfo[sMarketNo][2] = nBs;
+    gCurTaiexInfo[sMarketNo][3] = nSs;
 }
 
 long CalculateDiff(const std::string &data)
@@ -527,4 +667,167 @@ long CalculateDiff(const std::string &data)
 
     // Calculate and return the absolute difference
     return std::lround(std::abs(high - low));
+}
+
+void CaluCurCommHighLowPoint(IN long nStockIndex, IN long nClose, IN long nSimulate, IN long lTimehms)
+{
+    if (nClose <= 0 || nSimulate == 1)
+    {
+        return;
+    }
+
+    if (gCurServerTime[0] < 0)
+    {
+        return;
+    }
+
+    bool isDaySession = gCurServerTime[0] >= 8 && gCurServerTime[0] <= 14;
+
+    bool isNightSession = gCurServerTime[0] < 8 || gCurServerTime[0] > 14;
+
+    if ((isDaySession && lTimehms >= 84500 && lTimehms <= 134500) ||
+        (isNightSession && (lTimehms < 84500 || lTimehms > 134500)))
+    {
+        if (gCurCommHighLowPoint.count(nStockIndex) <= 0)
+        {
+            gCurCommHighLowPoint[nStockIndex] = {nClose, nClose};
+        }
+
+        gCurCommHighLowPoint[nStockIndex][0] = max(gCurCommHighLowPoint[nStockIndex][0], nClose);
+        gCurCommHighLowPoint[nStockIndex][1] = min(gCurCommHighLowPoint[nStockIndex][1], nClose);
+    }
+}
+
+void GetCurPrice(IN long nStockIndex, IN long nClose, IN long nSimulate)
+{
+    if (nClose <= 0 || nSimulate == 1)
+    {
+        return;
+    }
+
+    gCurMtxPrice[nStockIndex] = nClose / 100;
+}
+
+/**
+ * @brief Splits the given trading data into day and night sessions and records the highest and lowest prices.
+ *
+ * @param datetime The datetime string in "YYYY/MM/DD HH:MM" format.
+ * @param openPrice The opening price.
+ * @param highPrice The highest price.
+ * @param lowPrice The lowest price.
+ * @param closePrice The closing price.
+ * @param volume The trading volume.
+ */
+void processTradingData(const string &datetime, double openPrice, double highPrice, double lowPrice, double closePrice, int volume)
+{
+
+    DEBUG(DEBUG_LEVEL_INFO, "datetime: %s, highPrice: %ld, lowPrice: %ld", datetime, highPrice, lowPrice);
+
+    // Extract the date and time from the datetime string
+    string date = datetime.substr(0, 10);
+    string time = datetime.substr(11, 5);
+
+    // Convert time to hour and minute
+    int hour = stoi(time.substr(0, 2));
+    int minute = stoi(time.substr(3, 2));
+
+    if ((hour == 8 && minute >= 45) || (hour >= 9 && hour < 13) || (hour == 13 && minute <= 45))
+    {
+        // Day session
+        if (gDaysCommHighLowPoint.count(date) == 0)
+        {
+            gDaysCommHighLowPoint[date] = {highPrice, lowPrice};
+        }
+        else
+        {
+            auto &entry = gDaysCommHighLowPoint[date];
+            entry.first = max(entry.first, highPrice);
+            entry.second = min(entry.second, lowPrice);
+        }
+    }
+    else if (hour >= 15 || hour <= 5)
+    {
+        // Night session
+
+        // only have [15 -> 00]  [00 -> 05]
+        //               Day       Day+1
+        //           [fir, sec]  [fir, sec]
+
+        if (hour >= 15)
+        {
+            // 處理夜盤的邏輯
+            if (gNightCommHighLowPoint.count(date) == 0)
+            {
+                gNightCommHighLowPoint[date] = {{highPrice, lowPrice}, {DBL_MIN, DBL_MAX}};
+            }
+
+            auto &entry = gNightCommHighLowPoint[date].first;
+            entry.first = max(entry.first, highPrice);
+            entry.second = min(entry.second, lowPrice);
+
+            DEBUG(DEBUG_LEVEL_INFO, "datetime: %s, highPrice: %f, lowPrice: %f", datetime, highPrice, lowPrice);
+
+            DEBUG(DEBUG_LEVEL_INFO, "Date15_00: %s, High: %f, Low: %f",
+                  date, entry.first, entry.second);
+        }
+        else if (hour <= 5)
+        {
+            if (gNightCommHighLowPoint.count(date) == 0)
+            {
+                gNightCommHighLowPoint[date] = {{DBL_MIN, DBL_MAX}, {highPrice, lowPrice}};
+            }
+            auto &entry = gNightCommHighLowPoint[date].second;
+            entry.first = max(entry.first, highPrice);
+            entry.second = min(entry.second, lowPrice);
+
+            string prevDate = date;
+
+            // 如果時間是00:00到05:00，則視為前一天的夜盤
+            auto it = gNightCommHighLowPoint.find(date);
+
+            if (it != gNightCommHighLowPoint.begin())
+            {
+                --it;
+                prevDate = it->first;
+                DEBUG(DEBUG_LEVEL_INFO, "prevDate=%s", prevDate);
+            }
+
+            // 更新當前 second
+            auto &prevEntry = gNightCommHighLowPoint[prevDate].first;
+            entry.first = max(entry.first, prevEntry.first);
+            entry.second = min(entry.second, prevEntry.second);
+
+            DEBUG(DEBUG_LEVEL_INFO, "datetime: %s, highPrice: %f, lowPrice: %f", datetime, highPrice, lowPrice);
+
+            DEBUG(DEBUG_LEVEL_INFO, "Date0_5: %s, High: %f, Low: %f",
+                  date, entry.first, entry.second);
+        }
+    }
+}
+
+/**
+ * @brief Parses a trading data string and processes it.
+ *
+ * @param data The trading data string in the format "YYYY/MM/DD HH:MM, openPrice, highPrice, lowPrice, closePrice, volume".
+ */
+void parseAndProcessData(const string &data)
+{
+
+    stringstream ss(data);
+    string datetime;
+    double openPrice, highPrice, lowPrice, closePrice;
+    int volume;
+
+    getline(ss, datetime, ',');
+    ss >> openPrice;
+    ss.ignore(1); // Ignore the comma
+    ss >> highPrice;
+    ss.ignore(1); // Ignore the comma
+    ss >> lowPrice;
+    ss.ignore(1); // Ignore the comma
+    ss >> closePrice;
+    ss.ignore(1); // Ignore the comma
+    ss >> volume;
+
+    processTradingData(datetime, openPrice, highPrice, lowPrice, closePrice, volume);
 }

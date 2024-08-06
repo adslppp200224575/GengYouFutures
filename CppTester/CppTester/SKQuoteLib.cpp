@@ -5,6 +5,10 @@
 #include <map>
 #include <unordered_map>
 
+#define SK_SUBJECT_CONNECTION_CONNECTED 3001
+#define SK_SUBJECT_CONNECTION_DISCONNECT 3002
+#define SK_SUBJECT_CONNECTION_STOCKS_READY 3003
+
 bool gEatOffer = false;
 std::unordered_map<long, std::array<long, 2>> gCurCommHighLowPoint;
 std::deque<long> gDaysKlineDiff;
@@ -12,7 +16,7 @@ std::deque<long> gDaysKlineDiff;
 std::map<string, pair<double, double>> gDaysCommHighLowPoint;
 std::map<string, pair<pair<double, double>, pair<double, double>>> gNightCommHighLowPoint;
 
-std::unordered_map<long, long> gCurMtxPrice;
+std::unordered_map<long, long> gCurCommPrice;
 std::unordered_map<SHORT, std::array<long, 4>> gCurTaiexInfo;
 std::unordered_map<long, vector<pair<long, long>>> gBest5BidOffer;
 
@@ -404,34 +408,83 @@ void CSKQuoteLib::OnConnection(long nKind, long nCode)
 {
     switch (nKind)
     {
-    case 3001: // Connected
+    case SK_SUBJECT_CONNECTION_CONNECTED:
     {
         cout << endl
              << "OnConnection" << endl;
         break;
     }
-    case 3002: // Disconnected
+    case SK_SUBJECT_CONNECTION_DISCONNECT:
     {
         cout << endl
              << "OnConnection Disconnected" << endl;
         break;
     }
-    case 3003: //
+    case SK_SUBJECT_CONNECTION_STOCKS_READY: //
     {
         cout << endl
-             << "OnConnection 3003" << endl;
+             << "OnConnection STOCKS READY" << endl;
         break;
     }
     }
 }
 
+// struct SKSTOCKLONG
+// {
+//     LONG nStockidx; // 商品自定索引代號
+//     SHORT sDecimal; // 小數位數
+//     SHORT sTypeNo;  //  EX: (證券)類股別 1 水泥 , 2 食品…etc.
+
+//     BSTR bstrMarketNo;  // 市埸代碼　　　　　　　　　　　　　　　　　
+//     BSTR bstrStockNo;   // 商品代碼EX: 1101 台泥, TX12 台指期12月…etc.
+//     BSTR bstrStockName; // 商品名稱
+
+//     LONG nHigh;  // 最高價
+//     LONG nOpen;  // 開盤價
+//     LONG nLow;   // 最低價
+//     LONG nClose; // 成交價
+
+//     LONG nTickQty; // 單量
+
+//     LONG nRef; // 昨收、參考價
+
+//     LONG nBid; // 買價
+//     LONG nBc;  // 買量
+//     LONG nAsk; // 賣價
+//     LONG nAc;  // 賣量
+
+//     LONG nTBc; // 買盤量(即外盤量)
+//     LONG nTAc; // 賣盤量(即內盤量)
+
+//     LONG nFutureOI; // 期貨未平倉 OI
+
+//     LONG nTQty; // 總量
+//     LONG nYQty; // 昨量
+
+//     LONG nUp;       // 漲停價
+//     LONG nDown;     // 跌停價
+//     LONG nSimulate; // 揭示 0:一般 1:試算　＊
+//     　　　　　　　　 // [證券逐筆]盤中出現『1:試算』代表行情劇動，
+// 　　　　　　　　　　　　　觸發價格穩定措施狀態
+
+//     LONG nDayTrade // [限證券整股商品]可否當沖
+// 0:一般
+// 1:可先買後賣現股當沖
+// 2 : 可先買後賣和先賣後買現股當沖
+//                                    LONG nTradingDay // 交易日(YYYYMMDD)
+//                                        備註 : 當日非交易日時,
+//                                               資料為前一交易日
+//                                                   LONG nDealTime // 成交時間 (hhmmss)
+// };
+
 void CSKQuoteLib::OnNotifyQuoteLONG(short sMarketNo, long nStockIndex)
 {
     DEBUG(DEBUG_LEVEL_DEBUG, "start");
 
-    DEBUG(DEBUG_LEVEL_DEBUG, "sMarketNo= ", sMarketNo);
+    DEBUG(DEBUG_LEVEL_DEBUG, "sMarketNo= %d, nStockIndex=%d", sMarketNo, nStockIndex);
 
     SKCOMLib::SKSTOCKLONG skStock;
+
     long nResult = GetStockByIndexLONG(sMarketNo, nStockIndex, &skStock);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "GetStockByIndexLONG res = ", nResult);
@@ -452,13 +505,7 @@ void CSKQuoteLib::OnNotifyQuoteLONG(short sMarketNo, long nStockIndex)
           skStock.nClose,
           skStock.nTQty);
 
-    // printf("OnNotifyQuoteLONG : %s %s bid:%d ask:%d last:%d volume:%d\n",
-    //        szStockNo,
-    //        szStockName,
-    //        skStock.nBid,
-    //        skStock.nAsk,
-    //        skStock.nClose,
-    //        skStock.nTQty);
+    GetCurPrice(nStockIndex, skStock.nClose, skStock.nSimulate);
 
     delete[] szStockName;
     delete[] szStockNo;
@@ -587,7 +634,7 @@ void CSKQuoteLib::OnNotifyStockList(long sMarketNo, string strStockData)
 
 void CSKQuoteLib::OnNotifyKLineData(BSTR bstrStockNo, BSTR bstrData)
 {
-    DEBUG(DEBUG_LEVEL_INFO, "start");
+    DEBUG(DEBUG_LEVEL_DEBUG, "start");
 
     string strStockNo = string(_bstr_t(bstrStockNo));
 
@@ -685,8 +732,8 @@ void CaluCurCommHighLowPoint(IN long nStockIndex, IN long nClose, IN long nSimul
 
     bool isNightSession = gCurServerTime[0] < 8 || gCurServerTime[0] > 14;
 
-    if ((isDaySession && lTimehms >= 84500 && lTimehms <= 134500) ||
-        (isNightSession && (lTimehms < 84500 || lTimehms > 134500)))
+    if ((isDaySession && lTimehms > 50000 && lTimehms <= 134500) ||
+        (isNightSession && (lTimehms < 00000 || lTimehms > 134500)))
     {
         if (gCurCommHighLowPoint.count(nStockIndex) <= 0)
         {
@@ -705,7 +752,7 @@ void GetCurPrice(IN long nStockIndex, IN long nClose, IN long nSimulate)
         return;
     }
 
-    gCurMtxPrice[nStockIndex] = nClose / 100;
+    gCurCommPrice[nStockIndex] = nClose;
 }
 
 /**
@@ -721,7 +768,7 @@ void GetCurPrice(IN long nStockIndex, IN long nClose, IN long nSimulate)
 void processTradingData(const string &datetime, double openPrice, double highPrice, double lowPrice, double closePrice, int volume)
 {
 
-    DEBUG(DEBUG_LEVEL_INFO, "datetime: %s, highPrice: %ld, lowPrice: %ld", datetime, highPrice, lowPrice);
+    DEBUG(DEBUG_LEVEL_DEBUG, "datetime: %s, highPrice: %f, lowPrice: %f", datetime, highPrice, lowPrice);
 
     // Extract the date and time from the datetime string
     string date = datetime.substr(0, 10);
@@ -745,7 +792,7 @@ void processTradingData(const string &datetime, double openPrice, double highPri
             entry.second = min(entry.second, lowPrice);
         }
     }
-    else if (hour >= 15 || hour <= 5)
+    // else if (hour >= 15 || hour <= 5)
     {
         // Night session
 
@@ -753,55 +800,58 @@ void processTradingData(const string &datetime, double openPrice, double highPri
         //               Day       Day+1
         //           [fir, sec]  [fir, sec]
 
-        if (hour >= 15)
+        // if (hour >= 15)
+        // {
+        // 處理夜盤的邏輯
+        if (gNightCommHighLowPoint.count(date) == 0)
         {
-            // 處理夜盤的邏輯
-            if (gNightCommHighLowPoint.count(date) == 0)
-            {
-                gNightCommHighLowPoint[date] = {{highPrice, lowPrice}, {DBL_MIN, DBL_MAX}};
-            }
-
-            auto &entry = gNightCommHighLowPoint[date].first;
-            entry.first = max(entry.first, highPrice);
-            entry.second = min(entry.second, lowPrice);
-
-            DEBUG(DEBUG_LEVEL_INFO, "datetime: %s, highPrice: %f, lowPrice: %f", datetime, highPrice, lowPrice);
-
-            DEBUG(DEBUG_LEVEL_INFO, "Date15_00: %s, High: %f, Low: %f",
-                  date, entry.first, entry.second);
+            gNightCommHighLowPoint[date] = {{DBL_MIN, DBL_MAX}, {highPrice, lowPrice}};
         }
-        else if (hour <= 5)
-        {
-            if (gNightCommHighLowPoint.count(date) == 0)
-            {
-                gNightCommHighLowPoint[date] = {{DBL_MIN, DBL_MAX}, {highPrice, lowPrice}};
-            }
-            auto &entry = gNightCommHighLowPoint[date].second;
-            entry.first = max(entry.first, highPrice);
-            entry.second = min(entry.second, lowPrice);
 
-            string prevDate = date;
+        auto &entry = gNightCommHighLowPoint[date].second;
+        entry.first = max(entry.first, highPrice);
+        entry.second = min(entry.second, lowPrice);
 
-            // 如果時間是00:00到05:00，則視為前一天的夜盤
-            auto it = gNightCommHighLowPoint.find(date);
+        DEBUG(DEBUG_LEVEL_DEBUG, "datetime: %s, highPrice: %f, lowPrice: %f", datetime, highPrice, lowPrice);
 
-            if (it != gNightCommHighLowPoint.begin())
-            {
-                --it;
-                prevDate = it->first;
-                DEBUG(DEBUG_LEVEL_INFO, "prevDate=%s", prevDate);
-            }
+        DEBUG(DEBUG_LEVEL_DEBUG, "Date15_00: %s, High: %f, Low: %f",
+              date, entry.first, entry.second);
+        // }
+        // else if (hour <= 5)
+        // {
+        //     if (gNightCommHighLowPoint.count(date) == 0)
+        //     {
+        //         gNightCommHighLowPoint[date] = {{DBL_MIN, DBL_MAX}, {highPrice, lowPrice}};
+        //     }
+        //     auto &entry = gNightCommHighLowPoint[date].second;
+        //     entry.first = max(entry.first, highPrice);
+        //     entry.second = min(entry.second, lowPrice);
 
-            // 更新當前 second
-            auto &prevEntry = gNightCommHighLowPoint[prevDate].first;
-            entry.first = max(entry.first, prevEntry.first);
-            entry.second = min(entry.second, prevEntry.second);
+        //     string prevDate = "";
 
-            DEBUG(DEBUG_LEVEL_INFO, "datetime: %s, highPrice: %f, lowPrice: %f", datetime, highPrice, lowPrice);
+        //     // 如果時間是00:00到05:00，則視為前一天的夜盤
+        //     auto it = gNightCommHighLowPoint.find(date);
 
-            DEBUG(DEBUG_LEVEL_INFO, "Date0_5: %s, High: %f, Low: %f",
-                  date, entry.first, entry.second);
-        }
+        //     if (it != gNightCommHighLowPoint.begin())
+        //     {
+        //         --it;
+        //         prevDate = it->first;
+        //         DEBUG(DEBUG_LEVEL_INFO, "prevDate=%s", prevDate);
+        //     }
+
+        //     if (prevDate != "")
+        //     {
+        //         // 更新當前 second
+        //         auto &prevEntry = gNightCommHighLowPoint[prevDate].first;
+        //         entry.first = max(entry.first, prevEntry.first);
+        //         entry.second = min(entry.second, prevEntry.second);
+
+        //         DEBUG(DEBUG_LEVEL_INFO, "prevDate datetime: %s, highPrice: %f, lowPrice: %f", prevDate, prevEntry.first, prevEntry.second);
+        //     }
+
+        //     DEBUG(DEBUG_LEVEL_INFO, "Date0_5: %s, High: %f, Low: %f",
+        //           date, entry.first, entry.second);
+        // }
     }
 }
 

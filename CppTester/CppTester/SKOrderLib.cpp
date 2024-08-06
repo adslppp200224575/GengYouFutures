@@ -7,6 +7,17 @@
 
 using namespace std;
 
+// 4
+//  買賣別
+// 5
+//  未平倉部位
+// 6
+//  當沖未平倉部位
+// 7
+//  平均成本(小數部分已處理)
+
+LONG gOpenInterest[4] = {0, 0, 0, 0};
+
 CSKOrderLib::CSKOrderLib()
 {
     m_pSKOrderLib.CreateInstance(__uuidof(SKCOMLib::SKOrderLib));
@@ -43,7 +54,7 @@ HRESULT CSKOrderLib::OnEventFiringObjectInvoke(
     VariantInit(&varlValue);
     VariantClear(&varlValue);
 
-    DEBUG(DEBUG_LEVEL_DEBUG, "dispidMember == %d", dispidMember);
+    DEBUG(DEBUG_LEVEL_INFO, "dispidMember == %d", dispidMember);
 
     switch (dispidMember)
     {
@@ -75,6 +86,15 @@ HRESULT CSKOrderLib::OnEventFiringObjectInvoke(
         {
             BSTR bstrData = pdispparams->rgvarg[0].bstrVal;
             OnFutureRights(bstrData);
+        }
+        break;
+    }
+    case 4:
+    {
+        if (pdispparams->cArgs == 1)
+        {
+            BSTR bstrData = pdispparams->rgvarg[0].bstrVal;
+            OnOpenInterest(bstrData);
         }
         break;
     }
@@ -181,6 +201,7 @@ long CSKOrderLib::SendFutureOrder(string strLogInID, bool bAsyncOrder, string st
     pFutures.bstrPrice = _bstr_t(strPrice.c_str()).Detach();
     pFutures.nQty = nQty;
     pFutures.sReserved = sReserved;
+    pFutures.nOrderPriceType = 3;
 
     BSTR bstrMessage;
     long m_nCode = m_pSKOrderLib->SendFutureOrderCLR(_bstr_t(strLogInID.c_str()), VARIANT_BOOL(bAsyncOrder), &pFutures, &bstrMessage);
@@ -191,6 +212,90 @@ long CSKOrderLib::SendFutureOrder(string strLogInID, bool bAsyncOrder, string st
     DEBUG(DEBUG_LEVEL_INFO, "SendFutureOrder : %s", StrMessage);
 
     ::SysFreeString(bstrMessage);
+
+    return m_nCode;
+}
+
+// struct FUTUREORDER
+// {
+//     BSTR bstrFullAccount; // 期貨帳號，分公司代碼＋帳號7碼
+//     BSTR bstrStockNo;     // 委託期權商品代號
+//     SHORT sTradeType;     // 0:ROD 3:IOC 4:FOK ,sTradeType為ROD時，nOrderPriceType僅可指定限價
+//     SHORT sBuySell;  // 0:買進 1:賣出
+//     SHORT sDayTrade; // 當沖0:否 1:是，可當沖商品請參考交易所規定。
+//     SHORT sNewClose; // 新平倉，0:新倉 1:平倉 2:自動
+//     BSTR bstrPrice;  // 委託價格，(指定限價時，需填此欄)、[OCO]停利委託價。
+//                      // 請設nOrderPriceType代表範圍市價，不可用特殊價代碼「P」代表範圍市價 ,{移動停損不須填委託價格}
+//     BSTR bstrPrice2; //[OCO]停損委託價。
+//     LONG nQty;           // 交易口數
+//     BSTR bstrTrigger;    // 觸發價，觸發基準價、[OCO]停利觸發價。{期貨停損、移動停損、選擇權停損、MIT、OCO下單使用：不可0、不可給特殊價代碼P}
+//     BSTR bstrTrigger2; //[OCO]停損觸發價。
+
+//     BSTR bstrMovingPoint; //{僅移動停損下單使用}移動點數。
+//     SHORT sReserved;      // 盤別，0:盤中(T盤及T+1盤)；1:T盤預約{MIT 單不須填盤別}
+//     BSTR bstrDealPrice;   // 成交價 {限MIT下單使用：不可0、不可給特殊價代碼, 需自行取得委託當下成交價}
+
+//     BSTR bstrSettlementMonth; // 委託商品年月，YYYYMM共6碼(EX: 202206)
+//     LONG nOrderPriceType;     // 委託價類別  2: 限價; 3:範圍市價 （不支援市價）
+//                               // sTradeType為ROD時，nOrderPriceType僅可指定限價
+//     LONG nTriggerDirection;   //{限MIT下單使用} 觸發方向1:GTE, 2:LTE
+// };
+// 註 : 若委託期貨商品代號為TX00、 MTX00等近月商品，則可忽略bstrSettlementMonth商品年月
+
+long CSKOrderLib::SendFutureStop(string strLogInID,
+                                 bool bAsyncOrder,
+                                 string strStockNo,
+                                 short sTradeType,
+                                 short sBuySell,
+                                 short sDayTrade,
+                                 short sNewClose,
+                                 string strPrice,
+                                 string strTrigger,
+                                 long nQty,
+                                 short sReserved)
+{
+    DEBUG(DEBUG_LEVEL_INFO, "Start");
+
+    string strFullAccount_TF = "";
+
+    if (vec_strFullAccount_TF.size() > 0)
+        strFullAccount_TF = vec_strFullAccount_TF[0];
+    else
+    {
+        cout << "SendFutureStop Error : No Future Account.";
+        return -1;
+    }
+
+    DEBUG(DEBUG_LEVEL_INFO, "Consturt FUTUREORDER");
+
+    SKCOMLib::FUTUREORDER pFutures;
+    pFutures.bstrFullAccount = _bstr_t(strFullAccount_TF.c_str()).Detach();
+    pFutures.bstrStockNo = _bstr_t(strStockNo.c_str()).Detach();
+    pFutures.sTradeType = sTradeType;
+    pFutures.sBuySell = sBuySell;
+    pFutures.sDayTrade = sDayTrade;
+    pFutures.sNewClose = sNewClose;
+    // pFutures.bstrPrice = _bstr_t(strPrice.c_str()).Detach();
+    pFutures.bstrTrigger = _bstr_t(strTrigger.c_str()).Detach(); // For stop
+    pFutures.nQty = nQty;
+    pFutures.sReserved = sReserved;
+    pFutures.nOrderPriceType = 3;
+
+    DEBUG(DEBUG_LEVEL_INFO, "SendFutureStopLossOrder at %s", strTrigger);
+
+    BSTR bstrMessage;
+    long m_nCode = m_pSKOrderLib->SendFutureStopLossOrder(_bstr_t(strLogInID.c_str()), VARIANT_BOOL(bAsyncOrder), &pFutures, &bstrMessage);
+
+    DEBUG(DEBUG_LEVEL_INFO, "m_nCode=%ld", m_nCode);
+
+    string StrMessage = string(_bstr_t(bstrMessage));
+    cout << "SendFutureStop : " << StrMessage << endl;
+
+    DEBUG(DEBUG_LEVEL_INFO, "SendFutureStop : %s", StrMessage);
+
+    ::SysFreeString(bstrMessage);
+
+    DEBUG(DEBUG_LEVEL_INFO, "End");
 
     return m_nCode;
 }
@@ -223,6 +328,32 @@ long CSKOrderLib::SendOptionOrder(string strLogInID, bool bAsyncOrder, string st
     cout << "SendOptionOrder : " << string(_bstr_t(bstrMessage)) << endl;
 
     ::SysFreeString(bstrMessage);
+
+    return m_nCode;
+}
+
+long CSKOrderLib::GetOpenInterest(
+    string strLogInID,
+    long nFormat)
+{
+    DEBUG(DEBUG_LEVEL_INFO, "Start");
+
+    string strFullAccount_TF = "";
+
+    if (vec_strFullAccount_TF.size() > 0)
+        strFullAccount_TF = vec_strFullAccount_TF[0];
+    else
+    {
+        cout << "GetOpenInterest Error : No Future Account.";
+        return -1;
+    }
+
+    BSTR bstrLogInID = _bstr_t(strLogInID.c_str());
+    BSTR bstrAccount = _bstr_t(strFullAccount_TF.c_str());
+
+    long m_nCode = m_pSKOrderLib->GetOpenInterestGW(bstrLogInID, bstrAccount, nFormat);
+
+    DEBUG(DEBUG_LEVEL_INFO, "End");
 
     return m_nCode;
 }
@@ -411,7 +542,7 @@ void CSKOrderLib::OnFutureRights(BSTR bstrData)
 
     cout << endl;
 
-    // CalculateLoss();
+    DEBUG(DEBUG_LEVEL_INFO, "%s", strMessage);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
@@ -420,4 +551,38 @@ void CSKOrderLib::OnAsyncOrder(long nThreadID, long nCode, string strMessage)
 {
     cout << "On AsyncOrder ThreadID : " << nThreadID << ", nCode : " << nCode << ", Message : " << strMessage;
     cout << endl;
+}
+
+// 每一筆資料以「,」分隔每一個欄位，欄位依序為：
+// 格式1:
+// 1
+// 市場別
+// 2
+//  帳號
+// 3
+//  商品
+// 4
+//  買賣別
+// 5
+//  未平倉部位
+// 6
+//  當沖未平倉部位
+// 7
+//  平均成本(小數部分已處理)
+// 8
+//  單口手續費
+// 9
+//  交易稅(萬分之X)
+// 10
+//  LOGIN_ID
+
+void CSKOrderLib::OnOpenInterest(IN BSTR bstrData)
+{
+    DEBUG(DEBUG_LEVEL_DEBUG, "start");
+
+    string strMessage = string(_bstr_t(bstrData));
+
+    DEBUG(DEBUG_LEVEL_INFO, "strMessage=%s", strMessage);
+
+    DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }

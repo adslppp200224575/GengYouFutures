@@ -12,6 +12,16 @@
 #include <thread> // For std::this_thread::sleep_for
 #include <unordered_map>
 
+#include "Strategy.h"
+
+extern std::deque<long> gDaysKlineDiff;
+extern bool gEatOffer;
+extern std::unordered_map<long, std::array<long, 2>> gCurCommHighLowPoint;
+extern SHORT gCurServerTime[3];
+extern std::unordered_map<long, long> gCurCommPrice;
+extern std::unordered_map<SHORT, std::array<long, 4>> gCurTaiexInfo;
+extern std::unordered_map<long, vector<pair<long, long>>> gBest5BidOffer;
+
 // Define the global logger instance
 Logger logger("debug.log");
 
@@ -29,6 +39,7 @@ void AutoConnect()
     {
         g_nCode = pSKQuoteLib->EnterMonitorLONG();
         pSKCenterLib->PrintfCodeMessage("Quote", "EnterMonitor", g_nCode);
+        std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // 短暂休眠，避免过度占用 CPU
     }
 }
 
@@ -49,6 +60,29 @@ void AutoLogIn()
     pSKCenterLib->PrintfCodeMessage("AutoLogIn", "GetUserAccount", g_nCode);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
+}
+
+void AutoStopMTX(string strTrigger)
+{
+    DEBUG(DEBUG_LEVEL_INFO, "Started");
+
+    g_nCode = pSKOrderLib->SendFutureStop(g_strUserId,
+                                          false, // bAsyncOrder 是否為非同步委託。
+                                          "MTX00",
+                                          1, // IOC
+                                          1, // sell
+                                          0, // DayTrade
+                                          1, // NewClose
+                                          "P",
+                                          strTrigger,
+                                          1,
+                                          0);
+    // cash here
+    pSKCenterLib->PrintfCodeMessage("AutoStopMTX", "SendFutureStop", g_nCode);
+
+    DEBUG(DEBUG_LEVEL_INFO, "res = %d", g_nCode);
+
+    DEBUG(DEBUG_LEVEL_INFO, "end");
 }
 
 /**
@@ -83,17 +117,17 @@ void AutoLogIn()
  * @exception
  */
 
-void AutoOrderMTX()
+void AutoOrderMTX(IN SHORT NewClose)
 {
     DEBUG(DEBUG_LEVEL_DEBUG, "Started");
 
     g_nCode = pSKOrderLib->SendFutureOrder(g_strUserId,
-                                           false,
-                                           "MTX00",
-                                           1, // IOC
-                                           1, // sell
-                                           0, // DayTrade
-                                           2, // NewClose
+                                           false, // bAsyncOrder 是否為非同步委託。
+                                           "TM0000",
+                                           1,        // IOC
+                                           1,        // sell
+                                           0,        // DayTrade
+                                           NewClose, // NewClose ////新平倉，0:新倉 1:平倉 2:自動{新期貨、選擇權使用}
                                            "P",
                                            1,
                                            0);
@@ -102,10 +136,10 @@ void AutoOrderMTX()
     g_nCode = pSKOrderLib->SendFutureOrder(g_strUserId,
                                            false,
                                            "MTX00",
-                                           1, // IOC
-                                           1, // sell
-                                           0, // DayTrade
-                                           2, // NewClose
+                                           1,        // IOC
+                                           1,        // sell
+                                           0,        // DayTrade
+                                           NewClose, // NewClose
                                            "P",
                                            1,
                                            0);
@@ -116,10 +150,10 @@ void AutoOrderMTX()
     g_nCode = pSKOrderLib->SendFutureOrder(g_strUserId,
                                            false,
                                            "MTX00",
-                                           1, // IOC
-                                           0, // buy
-                                           0, // DayTrade
-                                           2, // NewClose
+                                           1,        // IOC
+                                           0,        // buy
+                                           0,        // DayTrade
+                                           NewClose, // NewClose
                                            "P",
                                            1,
                                            0);
@@ -127,6 +161,7 @@ void AutoOrderMTX()
     pSKCenterLib->PrintfCodeMessage("AutoOrderMTX", "SendFutureOrder", g_nCode);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "SendFutureOrder res = %d", g_nCode);
+    LOG(DEBUG_LEVEL_INFO, "SendFutureOrder res = %d", g_nCode);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
@@ -144,21 +179,17 @@ void AutoGetFutureRights()
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
 
-void AutoQuote(IN string ProductNum, short sPageNo)
+LONG AutoQuote(IN string ProductNum, short sPageNo)
 {
     DEBUG(DEBUG_LEVEL_DEBUG, "Started");
 
-    while (pSKQuoteLib->IsConnected() != 1)
-    {
-        g_nCode = pSKQuoteLib->EnterMonitorLONG();
-        pSKCenterLib->PrintfCodeMessage("Quote", "EnterMonitor", g_nCode);
-    }
-
     g_nCode = pSKQuoteLib->RequestStocks(&sPageNo, ProductNum);
     pSKCenterLib->PrintfCodeMessage("Quote", "RequestStocks", g_nCode);
-    DEBUG(DEBUG_LEVEL_DEBUG, "g_nCode= %d", g_nCode);
+    DEBUG(DEBUG_LEVEL_INFO, "g_nCode= %d", g_nCode);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
+
+    return g_nCode;
 }
 
 void AutoQuoteTicks(IN string ProductNum, short sPageNo)
@@ -178,289 +209,99 @@ void AutoKLineData(IN string ProductNum)
 {
     DEBUG(DEBUG_LEVEL_DEBUG, "Started");
 
-    while (pSKQuoteLib->IsConnected() != 1)
-    {
-        g_nCode = pSKQuoteLib->EnterMonitorLONG();
-        pSKCenterLib->PrintfCodeMessage("Quote", "EnterMonitor", g_nCode);
-    }
-
     g_nCode = pSKQuoteLib->RequestKLine(ProductNum);
 
-    DEBUG(DEBUG_LEVEL_INFO, "g_nCode=%ld", g_nCode);
+    DEBUG(DEBUG_LEVEL_DEBUG, "g_nCode=%ld", g_nCode);
 
     pSKCenterLib->PrintfCodeMessage("Quote", "RequestKLine", g_nCode);
 
     DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
 
-void Order()
+void AutoBest5Long(LONG ProductIdxNo, string ProductName)
 {
-    bool bOrder = true;
-    string strStockNo = "", strPrice = "", strNo = "";
-    short sPrime = 0, sPeriod = 0, sFlag = 0, sBuySell = 0, sTradeType = 0, sDayTrade = 0, sNewClose = 0, sReserved = 0;
-    int nOrderType = 0, nMarket = 0, nType = 0;
-    long nQty = 0, nTradeType = 0, nSpecialTradeType = 0;
-
-    // 初始化
-
-    g_nCode = pSKOrderLib->Initialize();
-    pSKCenterLib->PrintfCodeMessage("Order", "Initialize", g_nCode);
-
-    // 讀取憑證
-    g_nCode = pSKOrderLib->ReadCertByID(g_strUserId);
-    pSKCenterLib->PrintfCodeMessage("Order", "ReadCertByID", g_nCode);
-
-    // 取得帳號
-    g_nCode = pSKOrderLib->GetUserAccount();
-    pSKCenterLib->PrintfCodeMessage("Order", "GetUserAccount", g_nCode);
-
-    while (bOrder)
+    if (gBest5BidOffer[ProductIdxNo].size() >= 10)
     {
-        cout << endl
-             << "請選擇功能 (1：下單, 2：刪單, 3：改價, 4：改量, -1：退出)：";
-        cin >> nOrderType;
-        switch (nOrderType)
+        long curPrice = gCurCommPrice[ProductIdxNo];
+
+        long TotalBid = gBest5BidOffer[ProductIdxNo][0].second +
+                        gBest5BidOffer[ProductIdxNo][1].second +
+                        gBest5BidOffer[ProductIdxNo][2].second +
+                        gBest5BidOffer[ProductIdxNo][3].second +
+                        gBest5BidOffer[ProductIdxNo][4].second;
+        long TotalOffer = gBest5BidOffer[ProductIdxNo][9].second +
+                          gBest5BidOffer[ProductIdxNo][8].second +
+                          gBest5BidOffer[ProductIdxNo][7].second +
+                          gBest5BidOffer[ProductIdxNo][6].second +
+                          gBest5BidOffer[ProductIdxNo][5].second;
+
+        string Offer1Deal = "", Offer2Deal = "", Offer3Deal = "", Offer4Deal = "", Offer5Deal = "";
+        string Bid1Deal = "", Bid2Deal = "", Bid3Deal = "", Bid4Deal = "", Bid5Deal = "";
+
+        if (curPrice == gBest5BidOffer[ProductIdxNo][9].first)
         {
-        case 1:
-            cout << "請選擇市場 (0：證券, 1：期貨, 2：選擇權, -1：退出)：";
-            cin >> nOrderType;
-            switch (nOrderType)
-            {
-            case 0:
-                cout << "請輸入商品代碼：";
-                cin >> strStockNo;
-                cout << "請輸入公司種類 (0：上市櫃, 1：興櫃)：";
-                cin >> sPrime;
-                cout << "請輸入下單時段 (0：盤中, 1：盤後, 2：盤後零股)：";
-                cin >> sPeriod;
-                cout << "請輸入股票種類 (0：現股, 1：融資, 2：融券)：";
-                cin >> sFlag;
-                cout << "請輸入買賣別 (0：買, 1：賣)：";
-                cin >> sBuySell;
-                cout << "請輸入價格：";
-                cin >> strPrice;
-                cout << "請輸入數量：";
-                cin >> nQty;
-                cout << "請輸入ROD/IOC/FOK (0：ROD, 1：IOC, 2：FOK)：";
-                cin >> nTradeType;
-                cout << "請輸入限市價 (1：市價, 2：限價)：";
-                cin >> nSpecialTradeType;
-
-                g_nCode = pSKOrderLib->SendStockOrder(g_strUserId, false, strStockNo, sPrime, sPeriod, sFlag, sBuySell, strPrice, nQty, nTradeType, nSpecialTradeType);
-
-                pSKCenterLib->PrintfCodeMessage("Order", "SendStockOrder", g_nCode);
-
-                break;
-            case 1:
-            case 2:
-                cout << "請輸入商品代碼：";
-                cin >> strStockNo;
-                cout << "請輸入ROD/IOC/FOK (0：ROD, 1：IOC, 2：FOK)：";
-                cin >> sTradeType;
-                cout << "請輸入買賣別 (0：買, 1：賣)：";
-                cin >> sBuySell;
-                cout << "請輸入是否當沖 (0：否, 1：是)：";
-                cin >> sDayTrade;
-                cout << "請輸入新平倉 (0：新倉, 1：平倉, 2：自動)：";
-                cin >> sNewClose;
-                cout << "請輸入價格：";
-                cin >> strPrice;
-                cout << "請輸入數量：";
-                cin >> nQty;
-                cout << "請輸入盤別 (0：盤中, 1：T盤預約)：";
-                cin >> sReserved;
-
-                if (nOrderType == 1)
-                {
-                    g_nCode = pSKOrderLib->SendFutureOrder(g_strUserId, false, strStockNo, sTradeType, sBuySell, sDayTrade, sNewClose, strPrice, nQty, sReserved);
-                    pSKCenterLib->PrintfCodeMessage("Order", "SendFutureOrder", g_nCode);
-                }
-                else if (nOrderType == 2)
-                {
-                    g_nCode = pSKOrderLib->SendOptionOrder(g_strUserId, false, strStockNo, sTradeType, sBuySell, sDayTrade, sNewClose, strPrice, nQty, sReserved);
-                    pSKCenterLib->PrintfCodeMessage("Order", "SendOptionOrder", g_nCode);
-                }
-
-                break;
-            case -1:
-                break;
-            default:
-                cout << "輸入代碼錯誤，請重新輸入" << endl;
-                break;
-            }
-            break;
-        case 2:
-            cout << "請輸入市場別 (0：證券, 1：期貨, 2：選擇權)：";
-            cin >> nMarket;
-            cout << "請輸入刪單類別 (0：序號刪單, 1：書號刪單, 2：商品代號刪單)：";
-            cin >> nType;
-            cout << "請輸入刪單碼 (序號、書號、代號)：";
-            cin >> strNo;
-
-            g_nCode = pSKOrderLib->CancelOrder(g_strUserId, false, nMarket, nType, strNo);
-
-            pSKCenterLib->PrintfCodeMessage("Order", "CancelOrder", g_nCode);
-
-            break;
-        case 3:
-            cout << "請輸入市場別 (0：證券, 1：期貨, 2：選擇權)：";
-            cin >> nMarket;
-            cout << "請輸入改價類別 (0：序號改價, 1：書號改價)：";
-            cin >> nType;
-            cout << "請輸入改價碼 (序號、書號)：";
-            cin >> strNo;
-            cout << "請輸入改價價格：";
-            cin >> strPrice;
-            cout << "請輸入ROD/IOC/FOK (0：ROD, 1：IOC, 2：FOK)：";
-            cin >> nTradeType;
-            g_nCode = pSKOrderLib->CorrectPrice(g_strUserId, false, nMarket, nType, strNo, strPrice, nTradeType);
-
-            pSKCenterLib->PrintfCodeMessage("Order", "CorrectPrice", g_nCode);
-
-            break;
-        case 4:
-            cout << "請輸入市場別 (0：證券, 1：期貨, 2：選擇權)：";
-            cin >> nMarket;
-            cout << "請輸入改量碼 (序號)：";
-            cin >> strNo;
-            cout << "請輸入減量數量：";
-            cin >> nQty;
-
-            g_nCode = pSKOrderLib->DecreaseOrder(g_strUserId, false, nMarket, strNo, nQty);
-
-            pSKCenterLib->PrintfCodeMessage("Order", "CorrectPrice", g_nCode);
-            break;
-        case -1:
-            bOrder = false;
-            break;
-        default:
-            cout << "輸入代碼錯誤，請重新輸入" << endl;
-            break;
+            Offer5Deal = "*";
         }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][8].first)
+        {
+            Offer4Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][7].first)
+        {
+            Offer3Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][6].first)
+        {
+            Offer2Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][5].first)
+        {
+            Offer1Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][0].first)
+        {
+            Bid1Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][1].first)
+        {
+            Bid2Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][2].first)
+        {
+            Bid3Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][3].first)
+        {
+            Bid4Deal = "*";
+        }
+        else if (curPrice == gBest5BidOffer[ProductIdxNo][4].first)
+        {
+            Bid5Deal = "*";
+        }
+
+        printf("%s : %ld\n\n", ProductName.c_str(), curPrice);
+        printf("Total Offer: [%ld]\n", TotalOffer);
+
+        printf("Ask5: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][9].first, gBest5BidOffer[ProductIdxNo][9].second, Offer5Deal.c_str());
+        printf("Ask4: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][8].first, gBest5BidOffer[ProductIdxNo][8].second, Offer4Deal.c_str());
+        printf("Ask3: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][7].first, gBest5BidOffer[ProductIdxNo][7].second, Offer3Deal.c_str());
+        printf("Ask2: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][6].first, gBest5BidOffer[ProductIdxNo][6].second, Offer2Deal.c_str());
+        printf("Ask1: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][5].first, gBest5BidOffer[ProductIdxNo][5].second, Offer1Deal.c_str());
+        printf("=========================================\n");
+        printf("Bid1: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][0].first, gBest5BidOffer[ProductIdxNo][0].second, Bid1Deal.c_str());
+        printf("Bid2: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][1].first, gBest5BidOffer[ProductIdxNo][1].second, Bid2Deal.c_str());
+        printf("Bid3: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][2].first, gBest5BidOffer[ProductIdxNo][2].second, Bid3Deal.c_str());
+        printf("Bid4: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][3].first, gBest5BidOffer[ProductIdxNo][3].second, Bid4Deal.c_str());
+        printf("Bid5: [%ld]: [%ld]%s\n", gBest5BidOffer[ProductIdxNo][4].first, gBest5BidOffer[ProductIdxNo][4].second, Bid5Deal.c_str());
+
+        printf("Total Bid:   [%ld]\n", TotalBid);
+
+        printf("=========================================\n");
     }
-}
-
-void Reply()
-{
-    bool bReply = true;
-    int nReplyType = 0;
-
-    while (bReply)
+    else
     {
-        cout << endl
-             << "請選擇功能 (1：回報連線, 2：連線狀態, 3：回報斷線, -1：退出)：";
-        cin >> nReplyType;
-        switch (nReplyType)
-        {
-        case 1:
-            g_nCode = pSKReplyLib->SKReplyLib_ConnectByID(g_strUserId);
-
-            pSKCenterLib->PrintfCodeMessage("Reply", "SKReplyLib_ConnectByID", g_nCode);
-            break;
-        case 2:
-            g_nCode = pSKReplyLib->SKReplyLib_IsConnectedByID(g_strUserId);
-
-            cout << "SKReplyLib_IsConnectedByID (0：未連線, 1：連線, 2：下載中)：" << g_nCode << endl;
-            break;
-        case 3:
-            g_nCode = pSKReplyLib->SKReplyLib_SolaceCloseByID(g_strUserId);
-
-            pSKCenterLib->PrintfCodeMessage("Reply", "SKReplyLib_SolaceCloseByID", g_nCode);
-            break;
-        case -1:
-            bReply = false;
-            break;
-        default:
-            cout << "輸入代碼錯誤，請重新輸入" << endl;
-            break;
-        }
+        DEBUG(DEBUG_LEVEL_INFO, "gBest5BidOffer[ProductIdxNo].size() < 10");
     }
-}
-
-void Quote()
-{
-    DEBUG(DEBUG_LEVEL_DEBUG, "start");
-    bool bQuote = true;
-    int QuoteType = 0;
-    short sPageNo = -1, sMarket = 0;
-    string strStockNo = "";
-
-    // 報價功能
-    while (bQuote)
-    {
-        // 選擇功能
-        cout << endl
-             << "輸入代號(1：報價連線, 2：連線狀態, 3：報價斷線, 4：Quote, 5：Ticks & Best5, 6：StockList, -1：離開報價功能) ：";
-
-        cin >> QuoteType;
-        switch (QuoteType)
-        {
-        case 1:
-            g_nCode = pSKQuoteLib->EnterMonitorLONG();
-
-            pSKCenterLib->PrintfCodeMessage("Quote", "EnterMonitor", g_nCode);
-            break;
-        case 2:
-            g_nCode = pSKQuoteLib->IsConnected();
-
-            cout << "SKQuoteLib_IsConnected (0：未連線, 1：連線, 2：下載中)：" << g_nCode << endl;
-            break;
-        case 3:
-            g_nCode = pSKQuoteLib->LeaveMonitor();
-
-            pSKCenterLib->PrintfCodeMessage("Quote", "LeaveMonitor", g_nCode);
-            break;
-        case 4:
-            if (pSKQuoteLib->IsConnected() != 1)
-            {
-                cout << "尚未連線" << endl;
-                break;
-            }
-            cout << "請輸入商品代碼 (多筆以,分隔)：";
-            cin >> strStockNo;
-
-            sPageNo = 1;
-            g_nCode = pSKQuoteLib->RequestStocks(&sPageNo, strStockNo);
-
-            pSKCenterLib->PrintfCodeMessage("Quote", "RequestStocks", g_nCode);
-            break;
-        case 5:
-            if (pSKQuoteLib->IsConnected() != 1)
-            {
-                cout << "尚未連線" << endl;
-                break;
-            }
-            cout << "請輸入商品代碼 (限單筆)：";
-            cin >> strStockNo;
-
-            sPageNo = -1;
-            g_nCode = pSKQuoteLib->RequestTicks(&sPageNo, strStockNo);
-
-            pSKCenterLib->PrintfCodeMessage("Quote", "RequestTicks", g_nCode);
-            break;
-        case 6:
-            if (pSKQuoteLib->IsConnected() != 1)
-            {
-                cout << "尚未連線" << endl;
-                break;
-            }
-            cout << "請輸入市場代碼 (0：上市, 1：上櫃, 2：期貨, 3：選擇權, 4：興櫃, 5：上市盤中零股, 6：上櫃盤中零股)：";
-            cin >> sMarket;
-
-            g_nCode = pSKQuoteLib->RequestStockList(sMarket);
-
-            pSKCenterLib->PrintfCodeMessage("Quote", "RequestStockList", g_nCode);
-            break;
-        case -1:
-            bQuote = false;
-            break;
-        default:
-            cout << "輸入代碼錯誤，請重新輸入" << endl;
-            break;
-        }
-    }
-
-    DEBUG(DEBUG_LEVEL_DEBUG, "end");
 }
 
 void init()
@@ -480,38 +321,6 @@ void release()
 
     CoUninitialize();
 }
-
-void AutoSetup()
-{
-    if (pSKQuoteLib->IsConnected() != 1)
-    {
-        g_nCode = pSKQuoteLib->EnterMonitorLONG();
-        pSKCenterLib->PrintfCodeMessage("Quote", "EnterMonitor", g_nCode);
-    }
-    else
-    {
-        return;
-    }
-
-    // AutoLogIn();
-
-    // long res = pSKQuoteLib->GetMarketBuySellUpDown();
-    // DEBUG(DEBUG_LEVEL_DEBUG, "pSKQuoteLib->GetMarketBuySellUpDown()=%d", res);
-
-    // res = pSKQuoteLib->RequestServerTime();
-
-    // AutoQuoteTicks("2330", 1); // will return SK_ERROR_QUOTE_CONNECT_FIRST
-
-    // AutoQuoteTicks("MTX00", 2); // will return SK_ERROR_QUOTE_CONNECT_FIRST
-}
-
-extern std::deque<long> gDaysKlineDiff;
-extern bool gEatOffer;
-extern std::unordered_map<long, std::array<long, 2>> gCurCommHighLowPoint;
-extern SHORT gCurServerTime[3];
-extern std::unordered_map<long, long> gCurMtxPrice;
-extern std::unordered_map<SHORT, std::array<long, 4>> gCurTaiexInfo;
-extern std::unordered_map<long, vector<pair<long, long>>> gBest5BidOffer;
 
 // To do list:
 // 日夜盤都要算振福關卡價 (done)
@@ -538,14 +347,16 @@ extern std::unordered_map<long, vector<pair<long, long>>> gBest5BidOffer;
 void thread_main()
 {
     AutoLogIn();
-    // AutoOrderMTX();
-    // AutoGetFutureRights();
 
-    int x = 1;
+    AutoConnect();
+
+    AutoGetFutureRights();
 
     AutoKLineData("TX00");
 
     pSKQuoteLib->ProcessDaysOrNightCommHighLowPoint();
+
+    StrategyStopFuturesLoss(pSKOrderLib, g_strUserId);
 
     long long accu = 0;
     long AvgAmp = 0, LargestAmp = LONG_MIN, SmallestAmp = LONG_MAX, LargerAmp = 0, SmallAmp = 0;
@@ -573,46 +384,67 @@ void thread_main()
 
     long res = pSKQuoteLib->RequestServerTime();
 
-    DEBUG(DEBUG_LEVEL_DEBUG, "pSKQuoteLib->RequestServerTime()=%d", res);
+    DEBUG(DEBUG_LEVEL_INFO, "pSKQuoteLib->RequestServerTime()=%d", res);
 
     res = pSKQuoteLib->GetMarketBuySellUpDown();
-    DEBUG(DEBUG_LEVEL_DEBUG, "pSKQuoteLib->GetMarketBuySellUpDown()=%d", res);
+    DEBUG(DEBUG_LEVEL_INFO, "pSKQuoteLib->GetMarketBuySellUpDown()=%d", res);
 
     SKCOMLib::SKSTOCKLONG skStock;
 
-    res = pSKQuoteLib->RequestStockIndexMap("MTX00", &skStock);
+    res = pSKQuoteLib->RequestStockIndexMap("TX00", &skStock);
 
-    DEBUG(DEBUG_LEVEL_DEBUG, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
+    DEBUG(DEBUG_LEVEL_INFO, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
 
     long MTXIdxNo = skStock.nStockIdx;
 
     res = pSKQuoteLib->RequestStockIndexMap("2330", &skStock);
 
-    DEBUG(DEBUG_LEVEL_DEBUG, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
+    DEBUG(DEBUG_LEVEL_INFO, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
 
     long TSMCIdxNo = skStock.nStockIdx;
 
     res = pSKQuoteLib->RequestStockIndexMap("2317", &skStock);
 
-    DEBUG(DEBUG_LEVEL_DEBUG, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
+    DEBUG(DEBUG_LEVEL_INFO, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
 
-    res = pSKQuoteLib->RequestStockIndexMap("2454", &skStock);
+    long HHIdxNo = skStock.nStockIdx;
 
-    DEBUG(DEBUG_LEVEL_DEBUG, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
+    res = pSKQuoteLib->RequestStockIndexMap("TSEA", &skStock);
+
+    DEBUG(DEBUG_LEVEL_INFO, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
+
+    long TSEAIdxNo = skStock.nStockIdx;
+
+    // res = pSKQuoteLib->RequestStockIndexMap("2454", &skStock);
+
+    // DEBUG(DEBUG_LEVEL_INFO, "pSKQuoteLib->RequestStockIndexMap()=%d", res);
 
     // 设置定期清屏的时间间隔（以毫秒为单位）
     const int refreshInterval = 1000; // 1000毫秒
     auto lastClearTime = std::chrono::steady_clock::now();
 
-    AutoQuoteTicks("2330", 1);
+    // if (AutoQuote("TSEA,TX00", 2) != 0)
+    // {
+    AutoQuoteTicks("TSEA", 3);
+    AutoQuoteTicks("TX00", 4);
+    // }
 
-    AutoQuoteTicks("MTX00", 2);
+    AutoQuoteTicks("2330", 1);
+    AutoQuoteTicks("2317", 2);
 
     while (true)
     {
         // 获取当前时间
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastClearTime);
+
+        {
+            // Strategy start:
+
+            StrategyStopFuturesLoss(pSKOrderLib, g_strUserId);
+
+            // Strategy End:
+        }
 
         // 检查是否需要清屏
         if (elapsed.count() >= refreshInterval)
@@ -623,10 +455,10 @@ void thread_main()
             // 更新最后清屏时间
             lastClearTime = now;
 
-            printf("CurMtxPrice: %ld    ", gCurMtxPrice[MTXIdxNo]);
+            printf("CurMtxPrice: %ld    ", gCurCommPrice[MTXIdxNo]);
             printf("ServerTime: %d: %d: %d\n", gCurServerTime[0], gCurServerTime[1], gCurServerTime[2]);
-            printf("Time: %ld: Valume: %ld: Buy: %ld Sell: %ld\n",
-                   gCurTaiexInfo[0][0], gCurTaiexInfo[0][1], gCurTaiexInfo[0][2], gCurTaiexInfo[0][3]);
+            printf("Time: %ld: TSEA prices: %ld Valume: %ld: Buy: %ld Sell: %ld\n",
+                   gCurTaiexInfo[0][0], gCurCommPrice[TSEAIdxNo], gCurTaiexInfo[0][1], gCurTaiexInfo[0][2], gCurTaiexInfo[0][3]);
 
             printf("=========================================\n");
 
@@ -653,18 +485,19 @@ void thread_main()
                 printf("Short Key 4: %ld\n", CurHigh - LargerAmp);
                 printf("Short Key 5: %ld\n", CurHigh - LargestAmp);
 
-                printf("=========================================\n");
-
-                printf("SmallestAmp : %ld\n", SmallestAmp);
-                printf("SmallAmp : %ld\n", SmallAmp);
-                printf("AvgAmp : %ld\n", AvgAmp);
-                printf("LargerAmp : %ld\n", LargerAmp);
-                printf("LargestAmp : %ld\n", LargestAmp);
                 printf("\n");
                 printf("CurAmp : %d\n", CurHigh - CurLow);
 
                 printf("=========================================\n");
             }
+
+            printf("SmallestAmp : %ld\n", SmallestAmp);
+            printf("SmallAmp : %ld\n", SmallAmp);
+            printf("AvgAmp : %ld\n", AvgAmp);
+            printf("LargerAmp : %ld\n", LargerAmp);
+            printf("LargestAmp : %ld\n", LargestAmp);
+
+            printf("=========================================\n");
 
             if (gCurCommHighLowPoint.count(TSMCIdxNo) > 0)
             {
@@ -676,34 +509,8 @@ void thread_main()
                 printf("TSMCIdxNo : CurHigh: %ld, CurLow: %ld\n\n", CurHigh, CurLow);
             }
 
-            long TotalBid = gBest5BidOffer[TSMCIdxNo][0].second +
-                            gBest5BidOffer[TSMCIdxNo][1].second +
-                            gBest5BidOffer[TSMCIdxNo][2].second +
-                            gBest5BidOffer[TSMCIdxNo][3].second +
-                            gBest5BidOffer[TSMCIdxNo][4].second;
-            long TotalOffer = gBest5BidOffer[TSMCIdxNo][9].second +
-                              gBest5BidOffer[TSMCIdxNo][8].second +
-                              gBest5BidOffer[TSMCIdxNo][7].second +
-                              gBest5BidOffer[TSMCIdxNo][6].second +
-                              gBest5BidOffer[TSMCIdxNo][5].second;
-
-            printf("Total Offer: [%ld]\n", TotalOffer);
-
-            printf("Ask5: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][9].first, gBest5BidOffer[TSMCIdxNo][9].second);
-            printf("Ask4: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][8].first, gBest5BidOffer[TSMCIdxNo][8].second);
-            printf("Ask3: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][7].first, gBest5BidOffer[TSMCIdxNo][7].second);
-            printf("Ask2: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][6].first, gBest5BidOffer[TSMCIdxNo][6].second);
-            printf("Ask1: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][5].first, gBest5BidOffer[TSMCIdxNo][5].second);
-            printf("=========================================\n");
-            printf("Bid1: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][0].first, gBest5BidOffer[TSMCIdxNo][0].second);
-            printf("Bid2: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][1].first, gBest5BidOffer[TSMCIdxNo][1].second);
-            printf("Bid3: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][2].first, gBest5BidOffer[TSMCIdxNo][2].second);
-            printf("Bid4: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][3].first, gBest5BidOffer[TSMCIdxNo][3].second);
-            printf("Bid5: [%ld]: [%ld]\n", gBest5BidOffer[TSMCIdxNo][4].first, gBest5BidOffer[TSMCIdxNo][4].second);
-
-            printf("Total Bid:   [%ld]\n", TotalBid);
-
-            printf("=========================================\n");
+            AutoBest5Long(TSMCIdxNo, "TSMC");
+            AutoBest5Long(HHIdxNo, "HHP");
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 短暂休眠，避免过度占用 CPU
@@ -711,8 +518,10 @@ void thread_main()
         if (pSKQuoteLib->IsConnected() != 1)
         {
             DEBUG(DEBUG_LEVEL_ERROR, "pSKQuoteLib->IsConnected() != 1");
-            release();
-            exit(0);
+
+            AutoConnect();
+            // release();
+            // exit(0);
         }
     }
 }

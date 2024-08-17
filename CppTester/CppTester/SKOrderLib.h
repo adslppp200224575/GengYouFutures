@@ -1,5 +1,4 @@
 #pragma once
-
 #include "SKCOM_reference.h"
 #include "TEventHandler.h"
 #include <iostream>
@@ -71,6 +70,16 @@ private:
     vector<string> vec_strFullAccount_OF;
 };
 
+struct OpenInterestInfo
+{
+    string product;        //
+    string buySell;        //
+    LONG openPosition;     //
+    LONG dayTradePosition; //
+    DOUBLE avgCost;        //
+    DOUBLE profitAndLoss;
+};
+
 // struct FUTUREORDER
 // {
 //     BSTR bstrFullAccount;
@@ -86,11 +95,11 @@ private:
 //     short sBuySell;
 //     short sBuySell2;
 //     short sDayTrade;
-//     short sNewClose; // 0:新倉 1:平倉 2:自動{新期貨、選擇權使用}
+//     short sNewClose; // 0: 1: 2:{}
 //     long nQty;
 //     short sReserved;
 //     long nTimeFlag;
-//     long nOrderPriceType; // 委託價類別  2: 限價; 3:範圍市價 （不支援市價）,sTradeType為ROD時，nOrderPriceType僅可指定限價
+//     long nOrderPriceType; //   2: ; 3: ,sTradeTypeRODnOrderPriceType
 //     BSTR bstrCIDTandem;
 //     BSTR bstrOrderSign;
 //     BSTR bstrSettlementMonth;

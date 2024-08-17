@@ -1,20 +1,14 @@
-#include <windows.h>
-#include <tlhelp32.h>
 #include <iostream>
 #include <string>
+#include <windows.h>
+#include <tlhelp32.h>
+#include <psapi.h>
+#include <algorithm>
+#include <ctime>
+#include <filesystem>
 
-// Convert CHAR array to std::wstring
-std::wstring CharToWstring(const char *charArray)
+void PrintAllProcesses()
 {
-    int size = MultiByteToWideChar(CP_ACP, 0, charArray, -1, NULL, 0);
-    std::wstring wideString(size, 0);
-    MultiByteToWideChar(CP_ACP, 0, charArray, -1, &wideString[0], size);
-    return wideString;
-}
-
-DWORD GetProcessIDByName(const std::wstring &processName)
-{
-    DWORD processID = 0;
     HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hProcessSnap != INVALID_HANDLE_VALUE)
     {
@@ -24,66 +18,108 @@ DWORD GetProcessIDByName(const std::wstring &processName)
         {
             do
             {
-                std::wstring exeFile = CharToWstring(pe32.szExeFile); // Convert CHAR array to std::wstring
-                if (processName == exeFile)
+                HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe32.th32ProcessID);
+                if (hProcess)
                 {
-                    processID = pe32.th32ProcessID;
-                    break;
+                    wchar_t processPath[MAX_PATH];
+                    if (GetModuleFileNameExW(hProcess, NULL, processPath, MAX_PATH)) // 使用 Unicode 版本
+                    {
+                        std::wcout << L"Process: " << pe32.szExeFile << L" Path: " << processPath << std::endl;
+                    }
+                    CloseHandle(hProcess);
                 }
             } while (Process32Next(hProcessSnap, &pe32));
         }
         CloseHandle(hProcessSnap);
     }
-    return processID;
 }
 
-bool RestartProcess(const std::wstring &processPath)
+void TerminateProcessByPath(const std::wstring &processPath)
 {
-    // Ensure the process is started
-    STARTUPINFOW si = {sizeof(si)};
-    PROCESS_INFORMATION pi;
-    if (CreateProcessW(processPath.c_str(), NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+    HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hProcessSnap != INVALID_HANDLE_VALUE)
     {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        return true; // Process started successfully
+        PROCESSENTRY32 pe32;
+        pe32.dwSize = sizeof(PROCESSENTRY32);
+        if (Process32First(hProcessSnap, &pe32))
+        {
+            do
+            {
+                HANDLE hProcess = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, FALSE, pe32.th32ProcessID);
+                if (hProcess)
+                {
+                    wchar_t currentProcessPath[MAX_PATH];
+                    if (GetModuleFileNameExW(hProcess, NULL, currentProcessPath, MAX_PATH))
+                    {
+                        if (processPath == currentProcessPath)
+                        {
+                            if (TerminateProcess(hProcess, 0))
+                            {
+                                std::wcout << L"Successfully terminated process: " << pe32.szExeFile << L" Path: " << processPath << std::endl;
+                            }
+                            else
+                            {
+                                std::wcerr << L"Failed to terminate process: " << pe32.szExeFile << L" Path: " << processPath << std::endl;
+                            }
+                        }
+                    }
+                    CloseHandle(hProcess);
+                }
+            } while (Process32Next(hProcessSnap, &pe32));
+        }
+        CloseHandle(hProcessSnap);
     }
-    return false; // Failed to start the process
+}
+
+bool IsTimeToClose()
+{
+    time_t now = time(0);
+    tm localTime;
+    localtime_s(&localTime, &now);
+
+    if ((localTime.tm_hour == 8 && localTime.tm_min == 30) ||
+        (localTime.tm_hour == 15 && localTime.tm_min == 0))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+void PrintCurrentTime()
+{
+    time_t now = time(0);
+    tm localTime;
+    localtime_s(&localTime, &now);
+    std::wcout << L"Current time: "
+               << localTime.tm_hour << L":"
+               << localTime.tm_min << L":"
+               << localTime.tm_sec << std::endl;
 }
 
 int main()
 {
-    std::wstring processName = L"CppTester.exe";                                            // 要检测的进程名
-    std::wstring processPath = L"C:\\GengYouFutures\\CppTester\\x64\\Debug\\CppTester.exe"; // 进程的完整路径
-
-    // Start the process initially
-    if (RestartProcess(processPath))
-    {
-        std::wcout << L"Started " << processName << std::endl;
-    }
-    else
-    {
-        std::wcerr << L"Failed to start " << processName << std::endl;
-        return 1; // Exit if process can't be started initially
-    }
+    std::filesystem::path currentDrive = std::filesystem::current_path().root_name();
+    std::wstring processPath = currentDrive.wstring() + L"\\GengYouFutures\\CppTester\\x64\\Debug\\CppTester.exe";
+    int printCounter = 0;
 
     while (true)
     {
-        DWORD processID = GetProcessIDByName(processName);
-        if (processID == 0)
+        if (IsTimeToClose())
         {
-            // Process is not running, restart it
-            if (RestartProcess(processPath))
-            {
-                std::wcout << L"Restarted " << processName << std::endl;
-            }
-            else
-            {
-                std::wcerr << L"Failed to restart " << processName << std::endl;
-            }
+            std::wcout << L"Time's up. Attempting to terminate process at: " << processPath << std::endl;
+            // PrintAllProcesses();
+            TerminateProcessByPath(processPath);
+            Sleep(60000);
         }
-        Sleep(5000); // Check every 5 seconds
-    }
 
+        if (++printCounter >= 2)
+        {
+            PrintCurrentTime();
+            printCounter = 0;
+        }
+
+        Sleep(5000);
+    }
     return 0;
 }

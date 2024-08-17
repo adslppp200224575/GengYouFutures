@@ -3,7 +3,21 @@
 #include "SKCOM_reference.h"
 #include "TEventHandler.h"
 
+#define COMMODITY_MAIN "MTX00"
+#define COMMODITY_OTHER "TM0000"
+#define COMMODITY_TX_MAIN "TX00"
+
 #define DayMA 20
+#define COST_DAY_MA 1
+
+struct COMMODITY_INFO
+{
+    long MTXIdxNo;
+    long MTXIdxNoAM;
+    long TSMCIdxNo;
+    long HHIdxNo;
+    long TSEAIdxNo;
+};
 
 class CSKQuoteLib
 {
@@ -26,6 +40,7 @@ public:
     long RequestStockIndexMap(IN string strStockNo, OUT SKCOMLib::SKSTOCKLONG *pSKStock);
     long GetMarketBuySellUpDown(VOID);
     void ProcessDaysOrNightCommHighLowPoint();
+    VOID GetCommodityIdx(VOID);
 
     // Events
     void OnConnection(long nKind, long nCode);
@@ -69,3 +84,5 @@ private:
     SKCOMLib::ISKQuoteLibPtr m_pSKQuoteLib;
     ISKQuoteLibEventHandler *m_pSKQuoteLibEventHandler;
 };
+
+VOID GetCommodityIdx(VOID);

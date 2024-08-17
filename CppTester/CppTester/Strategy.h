@@ -1,3 +1,5 @@
+#pragma once
+
 #include "SKCenterLib.h"
 #include "SKOrderLib.h"
 #include "SKQuoteLib.h"
@@ -12,4 +14,58 @@
 #include <thread> // For std::this_thread::sleep_for
 #include <unordered_map>
 
-VOID StrategyStopFuturesLoss(CSKOrderLib *SKOrderLib, string strUserId);
+struct DAY_AMP_AND_KEY_PRICE
+{
+    long AvgAmp;
+    long LargestAmp;
+    long SmallestAmp;
+    long LargerAmp;
+    long SmallAmp;
+
+    long LongKey1;
+    long LongKey2;
+    long LongKey3;
+    long LongKey4;
+    long LongKey5;
+
+    long ShortKey1;
+    long ShortKey2;
+    long ShortKey3;
+    long ShortKey4;
+    long ShortKey5;
+};
+
+struct BID_OFFER_LONG_AND_SHORT
+{
+    LONG Tsmc;
+    LONG Foxconn;
+    LONG MediaTek;
+};
+
+VOID StrategyStopFuturesLoss(string strUserId, LONG MtxCommodtyInfo);
+VOID StrategyClosePosition(string strUserId, LONG MtxCommodtyInfo);
+VOID StrategyNewLongShortPosition(string strUserId, LONG MtxCommodtyInfo, LONG LongShort);
+LONG StrategyCaluBidOfferLongShort(VOID);
+VOID StrategyNewIntervalAmpLongShortPosition(string strUserId, LONG MtxCommodtyInfo, LONG LongShort);
+DOUBLE CountCostMovingAverage(VOID);
+
+LONG AutoOrder(IN string ProductNum, IN SHORT NewClose, IN SHORT BuySell);
+VOID AutoCalcuKeyPrices(VOID);
+
+// Strategy
+
+#define MAXIMUM_LOSS 3000
+#define ACTIVITY_POINT 100
+#define SWING_POINTS 20
+
+#define BID_OFFER_LONG_SHORT_THRESHOLD 100
+
+// Order
+
+#define ORDER_CLOSE_POSITION 1
+#define ORDER_NEW_POSITION 0
+#define DOLLARS_PER_TICK 10
+
+// Mode
+
+#define TEST_MODE 1
